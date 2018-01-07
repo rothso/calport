@@ -13,13 +13,28 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 	"syscall"
 	"strings"
+	"github.com/PuerkitoBio/goquery"
+	"regexp"
+	"github.com/k0kubun/pp"
 )
+
+type Course struct {
+	Code       string
+	Name       string
+	Instructor string
+	Location   string
+	Days       []byte
+	DateStart  time.Time
+	DateEnd    time.Time
+	TimeStart  time.Time
+	TimeEnd    time.Time
+}
 
 func main() {
 	// Download the schedule page if it hasn't been downloaded yet
 	cacheDir := "./.cache"
-	file := filepath.Join(cacheDir, "schedule.html");
-	if _, err := os.Stat(file); os.IsNotExist(err) {
+	fileName := filepath.Join(cacheDir, "schedule.html");
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
 		username, password := readCredentials()
 		html, err := getRawSchedule(username, password)
 		if err != nil {
@@ -30,14 +45,85 @@ func main() {
 			}
 		}
 
-		log.Printf("Success! Saving raw schedule to %s\n", file)
+		log.Printf("Success! Saving raw schedule to %s\n", fileName)
 		os.Mkdir(cacheDir, os.ModePerm)
-		ioutil.WriteFile(file, []byte(html), 0644)
+		ioutil.WriteFile(fileName, []byte(html), 0644)
 	} else {
-		log.Println("Cached schedule found! Nothing to download")
+		log.Printf("Found cached schedule at %s\n", fileName)
 	}
 
-	// TODO: parse results, integrate with Google Calendar
+	// Extract schedule data
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+	doc, err := goquery.NewDocumentFromReader(file)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print("Reading schedule...")
+
+	courses := make([]Course, 0)
+
+	// TODO: move parsing into a function
+	detailsTables := doc.Find(`.datadisplaytable[summary*="course detail"]`)
+	meetingTables := doc.Find(`.datadisplaytable[summary*="meeting times"]`)
+
+	// Iterate over each listed course
+	meetingTables.Each(func(i int, meeting *goquery.Selection) {
+		details := detailsTables.Eq(i) // corresponding details table
+		data := meeting.Find("td")
+
+		// Course code and name
+		header := strings.Split(details.Find("caption").First().Text(), " - ")
+		code := header[1]
+		name := header[0]
+
+		// Instructor's full name
+		instructorR := regexp.MustCompile(`([\s\w-]+) \(P\)`)
+		instructor := instructorR.FindStringSubmatch(data.Last().Text())[1]
+
+		// Full location: building number, name, and room
+		location := data.Eq(3).Text()
+
+		// Days of the week
+		days := []byte(data.Eq(2).Text())
+
+		// Starting and ending calendar dates
+		dates := strings.Split(data.Eq(4).Text(), " - ")
+		dateFmt := "Jan 02, 2006"
+		dateStart, _ := time.Parse(dateFmt, dates[0])
+		dateEnd, _ := time.Parse(dateFmt, dates[1])
+
+		// Start and end class times
+		times := strings.Split(data.Eq(1).Text(), " - ")
+		timeFmt := "3:04 pm"
+		timeStart, _ := time.Parse(timeFmt, times[0])
+		timeEnd, timeErr := time.Parse(timeFmt, times[1])
+
+		if timeErr != nil {
+			log.Printf("Omitting %s (%s): online course\n", code, name)
+			return // courses without a time can't be placed onto a calendar
+		}
+
+		courses = append(courses, Course{
+			Code:       code,
+			Name:       name,
+			Instructor: instructor,
+			Location:   location,
+			Days:       days,
+			DateStart:  dateStart,
+			DateEnd:    dateEnd,
+			TimeStart:  timeStart,
+			TimeEnd:    timeEnd,
+		})
+	})
+
+	log.Printf("Found %d courses, dumping:\n", len(courses))
+	pp.Println(courses)
+
+	// TODO: integrate with Google Calendar
 }
 
 func readCredentials() (string, string) {
