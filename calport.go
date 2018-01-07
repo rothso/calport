@@ -9,32 +9,50 @@ import (
 	"os"
 	"io/ioutil"
 	"path/filepath"
+	"bufio"
+	"golang.org/x/crypto/ssh/terminal"
+	"syscall"
+	"strings"
 )
 
 func main() {
-	var username, password string // TODO: read from CLI
-
 	// Download the schedule page if it hasn't been downloaded yet
 	cacheDir := "./.cache"
 	file := filepath.Join(cacheDir, "schedule.html");
 	if _, err := os.Stat(file); os.IsNotExist(err) {
-		log.Println("Logging into myWings...")
+		username, password := readCredentials()
 		html, err := getRawSchedule(username, password)
 		if err != nil {
-			log.Fatal(err)
+			if err.Error() == "timeout waiting for initial target" {
+				log.Fatal("ChromeDriver timed out while waiting for Chrome to open. Please try again.")
+			} else {
+				log.Fatal(err)
+			}
 		}
 
 		log.Printf("Success! Saving raw schedule to %s\n", file)
-		err = os.Mkdir(cacheDir, os.ModePerm)
-		if err != nil {
-			log.Fatal(err)
-		}
+		os.Mkdir(cacheDir, os.ModePerm)
 		ioutil.WriteFile(file, []byte(html), 0644)
 	} else {
 		log.Println("Cached schedule found! Nothing to download")
 	}
 
 	// TODO: parse results, integrate with Google Calendar
+}
+
+func readCredentials() (string, string) {
+	// Read username
+	fmt.Print("Username for 'mywings.unf.edu': ")
+	username, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	username = strings.TrimSpace(username)
+
+	// Read password (masked)
+	fmt.Printf("Password for '%s': ", username)
+	passwordBytes, _ := terminal.ReadPassword(syscall.Stdin)
+	password := strings.TrimSpace(string(passwordBytes))
+
+	fmt.Print("\n")
+	return username, password
 }
 
 func getRawSchedule(username, password string) (string, error) {
@@ -45,12 +63,16 @@ func getRawSchedule(username, password string) (string, error) {
 	defer cancel()
 
 	// Create chrome instance
-	c, err := chromedp.New(ctxt/*, chromedp.WithDebugf(log.Printf))*/)
+	log.Println("Launching Chrome...")
+	suppressErrors := chromedp.WithErrorf(func(string, ...interface{}) {})
+	c, err := chromedp.New(ctxt, suppressErrors)
 	if err != nil {
 		return "", err
 	}
 
 	// Log in and get the schedule for the current term
+	// TODO: split into login & scrapeSchedule to handle login failures
+	log.Println("Logging into myWings...")
 	err = c.Run(ctxt, scrapeSchedule(username, password, &html))
 	if err != nil {
 		return "", err
