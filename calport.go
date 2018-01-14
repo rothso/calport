@@ -9,7 +9,6 @@ import (
 	"os"
 	"io/ioutil"
 	"path/filepath"
-	"bufio"
 	"golang.org/x/crypto/ssh/terminal"
 	"syscall"
 	"strings"
@@ -33,14 +32,14 @@ type Course struct {
 type Schedule []Course
 
 func main() {
-	// TODO: read username from CLI arg, and only ask for password if schedule is not cached
+	username := os.Args[1]; // myWings username
 
 	// Download the schedule page if it hasn't been downloaded yet
 	// TODO: hide cache as an implementation detail for getHtmlSchedule()
 	cacheDir := "./.cache"
-	fileName := filepath.Join(cacheDir, "schedule.html")
+	fileName := filepath.Join(cacheDir, username+".html")
 	if _, err := os.Stat(fileName); os.IsNotExist(err) {
-		username, password := readCredentials()
+		password := readPassword(username);
 		html, err := getRawSchedule(username, password)
 		if err != nil {
 			if err.Error() == "timeout waiting for initial target" {
@@ -77,19 +76,14 @@ func main() {
 	// TODO: integrate with Google Calendar
 }
 
-func readCredentials() (string, string) {
-	// Read username
-	fmt.Print("Username for 'mywings.unf.edu': ")
-	username, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	username = strings.TrimSpace(username)
-
+func readPassword(username string) string {
 	// Read password (masked)
 	fmt.Printf("Password for '%s': ", username)
 	passwordBytes, _ := terminal.ReadPassword(syscall.Stdin)
 	password := strings.TrimSpace(string(passwordBytes))
 
 	fmt.Print("\n")
-	return username, password
+	return password
 }
 
 func getRawSchedule(username, password string) (string, error) {
