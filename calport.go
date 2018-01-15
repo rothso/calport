@@ -31,49 +31,40 @@ type Course struct {
 
 type Schedule []Course
 
+var cacheDir = "./.cache"
+
 func main() {
-	username := os.Args[1]; // myWings username
+	username := os.Args[1] // myWings username
 
-	// Download the schedule page if it hasn't been downloaded yet
-	// TODO: hide cache as an implementation detail for getHtmlSchedule()
-	cacheDir := "./.cache"
-	fileName := filepath.Join(cacheDir, username+".html")
-	if _, err := os.Stat(fileName); os.IsNotExist(err) {
-		password := readPassword(username);
-		html, err := getRawSchedule(username, password)
-		if err != nil {
-			if err.Error() == "timeout waiting for initial target" {
-				// TODO: leaking implementation detail; mask error inside getRawSchedule
-				log.Fatal("ChromeDriver timed out while waiting for Chrome to open. Please try again.")
-			} else {
-				log.Fatal(err)
-			}
-		}
-
-		log.Printf("Success! Saving raw schedule to %s\n", fileName)
-		os.Mkdir(cacheDir, os.ModePerm)
-		ioutil.WriteFile(fileName, []byte(html), 0644)
-	} else {
-		log.Printf("Found cached schedule at %s\n", fileName)
-	}
-
-	// Extract schedule data
-	// TODO: move into helper function documentFromFile
-	file, err := os.Open(fileName)
+	// Download and parse schedule
+	document, err := downloadSchedule(username, readPassword)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer file.Close()
-	doc, err := goquery.NewDocumentFromReader(file)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Print("Reading schedule...")
-	courses := parseSchedule(doc)
-	log.Printf("Found %d courses, dumping:\n", len(courses))
-	pp.Println(courses)
+	schedule := parseSchedule(document)
+	log.Printf("Found %d courses, dumping:\n", len(schedule))
+	pp.Println(schedule)
 
 	// TODO: integrate with Google Calendar
+}
+
+func downloadSchedule(username string, getPassword func(string) string) (*goquery.Document, error) {
+	// Check if there's a cached copy first
+	filename := filepath.Join(cacheDir, username+".html")
+	if file, err := os.Open(filename); err == nil {
+		return goquery.NewDocumentFromReader(file) // TODO: bust cache for new terms
+	}
+	// Fetch schedule using ChromeDriver
+	password := getPassword(username)
+	raw, err := fetchSchedule(username, password)
+	for err != nil && err.Error() == "timeout waiting for initial target" {
+		log.Println("Failed to launch ChromeDriver before timeout, retrying...")
+		raw, err = fetchSchedule(username, password)
+	}
+	// Cache for later
+	os.Mkdir(cacheDir, os.ModePerm)
+	ioutil.WriteFile(filename, []byte(raw), 0644)
+	return goquery.NewDocumentFromReader(strings.NewReader(raw))
 }
 
 func readPassword(username string) string {
@@ -86,7 +77,7 @@ func readPassword(username string) string {
 	return password
 }
 
-func getRawSchedule(username, password string) (string, error) {
+func fetchSchedule(username, password string) (string, error) {
 	var html string
 
 	// Create context
