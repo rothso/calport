@@ -52,6 +52,7 @@ func downloadSchedule(username string, getPassword func(string) string) (*goquer
 	// Check if there's a cached copy first
 	filename := filepath.Join(cacheDir, username+".html")
 	if file, err := os.Open(filename); err == nil {
+		defer file.Close()
 		return goquery.NewDocumentFromReader(file) // TODO: bust cache for new terms
 	}
 	// Fetch schedule using ChromeDriver
